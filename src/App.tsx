@@ -1,133 +1,172 @@
 import { useRef, useState, useEffect } from "react";
 
-interface WallColour {
-  r: number;
-  g: number;
-  b: number;
-}
-
 export default function App() {
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const frameRef = useRef<number>(0);
-  const [status, setStatus] = useState("Click to start");
+  const analysisCanvasRef = useRef<HTMLCanvasElement>(null);
+  const displayCanvasRef = useRef<HTMLCanvasElement>(null);
+  const frameRef = useRef<number | null>(null);
+
   const [ready, setReady] = useState(false);
-  const [wallColour, setWallColour] = useState<WallColour | null>(null);
+  const [status, setStatus] = useState("Start camera");
+  const [showCamera, setShowCamera] = useState(true);
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
+      setStatus("Starting camera...");
 
-      if (!video || !canvas) return;
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: {
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          frameRate: { ideal: 30 },
+        },
+        audio: false,
+      });
+
+      const video = videoRef.current;
+      const analysisCanvas = analysisCanvasRef.current;
+      const displayCanvas = displayCanvasRef.current;
+
+      if (!video || !analysisCanvas || !displayCanvas) {
+        setStatus("Camera unavailable");
+        return;
+      }
 
       video.srcObject = stream;
 
-      video.onloadedmetadata = () => {
-        video.play();
-        canvas.width = window.innerWidth;
-        canvas.height = window.innerHeight;
+      video.onloadedmetadata = async () => {
+        await video.play();
+
+        analysisCanvas.width = 320;
+        analysisCanvas.height = 180;
+
+        displayCanvas.width = window.innerWidth;
+        displayCanvas.height = window.innerHeight;
+
         setReady(true);
-        setStatus("");
+        setStatus("Camera active");
       };
-    } catch {
-      setStatus("Error starting camera");
+    } catch (error) {
+      console.error("Camera error:", error);
+      setStatus("Retry camera");
     }
-  };
-
-  const getWallColour = () => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d", { willReadFrequently: true });
-    if (!ctx) return;
-
-    const { width: W, height: H } = canvas;
-
-    const imageData = ctx.getImageData(0, 0, W, H).data;
-
-    let r = 0;
-    let g = 0;
-    let b = 0;
-    let n = 0;
-
-    const step = 4;
-
-    for (let y = Math.floor(H * 0.2); y < Math.floor(H * 0.8); y += step) {
-      for (let x = Math.floor(W * 0.2); x < Math.floor(W * 0.8); x += step) {
-        const i = (y * W + x) * 4;
-
-        r += imageData[i];
-        g += imageData[i + 1];
-        b += imageData[i + 2];
-        n++;
-      }
-    }
-
-    if (n === 0) {
-      setStatus("No pixels sampled");
-      return;
-    }
-
-    const colour = {
-      r: Math.round(r / n),
-      g: Math.round(g / n),
-      b: Math.round(b / n),
-    };
-
-    setWallColour(colour);
   };
 
   useEffect(() => {
     if (!ready) return;
 
     const video = videoRef.current;
-    const canvas = canvasRef.current;
+    const analysisCanvas = analysisCanvasRef.current;
+    const displayCanvas = displayCanvasRef.current;
 
-    if (!video || !canvas) return;
+    if (!video || !analysisCanvas || !displayCanvas) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const analysisContext = analysisCanvas.getContext("2d", {
+      willReadFrequently: true,
+    });
 
-    const draw = () => {
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      frameRef.current = requestAnimationFrame(draw);
+    const displayContext = displayCanvas.getContext("2d");
+
+    if (!analysisContext || !displayContext) return;
+
+    const drawFrame = () => {
+      analysisContext.drawImage(
+        video,
+        0,
+        0,
+        analysisCanvas.width,
+        analysisCanvas.height,
+      );
+
+      displayContext.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+
+      if (showCamera) {
+        // Development mode: draw the camera onto the visible canvas.
+        displayContext.drawImage(
+          video,
+          0,
+          0,
+          displayCanvas.width,
+          displayCanvas.height,
+        );
+      } else {
+        // Final mode: do not show the camera.
+        displayContext.fillStyle = "#18181b";
+        displayContext.fillRect(
+          0,
+          0,
+          displayCanvas.width,
+          displayCanvas.height,
+        );
+      }
+
+      frameRef.current = requestAnimationFrame(drawFrame);
     };
 
-    frameRef.current = requestAnimationFrame(draw);
+    frameRef.current = requestAnimationFrame(drawFrame);
 
-    return () => cancelAnimationFrame(frameRef.current);
-  }, [ready]);
+    return () => {
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+      }
+    };
+  }, [ready, showCamera]);
+
+  useEffect(() => {
+    const resizeDisplayCanvas = () => {
+      const displayCanvas = displayCanvasRef.current;
+
+      if (!displayCanvas) return;
+
+      displayCanvas.width = window.innerWidth;
+      displayCanvas.height = window.innerHeight;
+    };
+
+    window.addEventListener("resize", resizeDisplayCanvas);
+
+    return () => {
+      window.removeEventListener("resize", resizeDisplayCanvas);
+
+      if (frameRef.current !== null) {
+        cancelAnimationFrame(frameRef.current);
+      }
+
+      // Stop the camera when the component is removed.
+      const stream = videoRef.current?.srcObject;
+
+      if (stream instanceof MediaStream) {
+        stream.getTracks().forEach((track) => track.stop());
+      }
+    };
+  }, []);
 
   return (
-    <div className="fixed inset-0 bg-zinc-950 text-white">
-      <video ref={videoRef} className="hidden" playsInline />
-      <canvas ref={canvasRef} className="fixed inset-0 w-full h-full" />
+    <main className="fixed inset-0 overflow-hidden bg-zinc-950 text-white">
+      <video ref={videoRef} className="hidden" playsInline muted />
 
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-3">
-        <p className="text-sm text-white/50">{status}</p>
+      <canvas ref={analysisCanvasRef} className="hidden" />
 
-        <div className="flex gap-2">
-          <button
-            onClick={startCamera}
-            disabled={ready}
-            className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-colors"
-          >
-            {ready ? "Camera active" : "Start camera"}
-          </button>
+      <canvas ref={displayCanvasRef} className="fixed inset-0 h-full w-full" />
 
-          <button
-            onClick={getWallColour}
-            disabled={!ready}
-            className="px-4 py-2 rounded-lg bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-colors"
-          >
-            {wallColour
-              ? `RGB: ${wallColour.r}, ${wallColour.g}, ${wallColour.b}`
-              : "Sample wall"}
-          </button>
-        </div>
+      <div className="absolute left-1/2 top-4 z-10 flex -translate-x-1/2 gap-2">
+        <button
+          type="button"
+          onClick={startCamera}
+          disabled={ready || status === "Starting camera..."}
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm transition-colors hover:bg-indigo-500 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {status}
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setShowCamera((current) => !current)}
+          disabled={!ready}
+          className="rounded-lg bg-zinc-700 px-4 py-2 text-sm transition-colors hover:bg-zinc-600 disabled:cursor-not-allowed disabled:opacity-50"
+        >
+          {showCamera ? "Hide camera" : "Show camera"}
+        </button>
       </div>
-    </div>
+    </main>
   );
 }
