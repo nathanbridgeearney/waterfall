@@ -1,42 +1,62 @@
-import {
-  useRef,
-  useState,
-} from 'react'
-
+import { useRef, useState, useEffect } from "react";
 
 export default function App() {
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const [status, setStatus] = useState('Click to start')
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const frameRef = useRef<number>(0);
+  const [status, setStatus] = useState("Click to start");
+  const [ready, setReady] = useState(false);
 
   const startCamera = async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-        setStatus('Camera started')
-      }
-    }catch{
-      setStatus('Error starting camera')
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      if (!video || !canvas) return;
+      video.srcObject = stream;
+      video.onloadedmetadata = () => {
+        video.play();
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+        setReady(true);
+        setStatus("");
+      };
+    } catch {
+      setStatus("Error starting camera");
     }
-  }
+  };
 
+  useEffect(() => {
+    if (!ready) return;
+    const video = videoRef.current;
+    const canvas = canvasRef.current;
+    if (!video || !canvas) return;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
 
-return (
-    <div className="min-h-screen bg-zinc-950 text-white flex flex-col items-center justify-center gap-4 p-4">
-      <p className="text-sm text-white/50">{status}</p>
-      <button
-        onClick={startCamera}
-        className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm transition-colors"
-      >
-        Start camera
-      </button>
-      <video
-        ref={videoRef}
-        autoPlay
-        playsInline
-        className="rounded-xl border border-white/10 w-full max-w-2xl"
-      />
+    const draw = () => {
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      frameRef.current = requestAnimationFrame(draw);
+    };
+    frameRef.current = requestAnimationFrame(draw);
+
+    return () => cancelAnimationFrame(frameRef.current);
+  }, [ready]);
+
+  return (
+    <div className="fixed inset-0 bg-zinc-950 text-white">
+      <video ref={videoRef} className="hidden" playsInline />
+      <canvas ref={canvasRef} className="fixed inset-0 w-full h-full" />
+      <div className="absolute top-4 left-1/2 -translate-x-1/2 z-10 flex flex-col items-center gap-3">
+        <p className="text-sm text-white/50">{status}</p>
+        <button
+          onClick={startCamera}
+          disabled={ready}
+          className="px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed text-sm transition-colors"
+        >
+          {ready ? "Camera active" : "Start camera"}
+        </button>
+      </div>
     </div>
-  )
-
+  );
 }
